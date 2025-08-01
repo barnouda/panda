@@ -1,143 +1,235 @@
-subroutine trilinintcoeffs(nx,ny,nz,x,y,z,v,ni,xi,yi,zi,vi,ci,nanvalue)
-
-    use omp_lib
+subroutine trilinintcoeffs(x1,x2,y1,y2,z1,z2,xa,ya,za,xb,yb,zb,x0,y0,z0,azim,elev,ci)
+! Analytical computation of the contribution of the 8 surrounding nodes to
+! a segment within these 8 nodes and belonging to a line defined by
+! (x0,y0,z0,azim,elev)
+! The contribution of the 8 nodes is stored in ci
 
     implicit none
 
-    integer :: nx,ny,nz
-    real(8), dimension(nx) :: x
-    real(8), dimension(ny) :: y
-    real(8), dimension(nz) :: z
-    real(8), dimension(nx*ny*nz) :: v
+    real(8) :: x1, x2, y1, y2, z1, z2           ! cube limits
+    real(8) :: xa, ya, za, xb, yb, zb           ! start and end segment points
+    real(8) :: x0, y0, z0                       ! origin of the los
+    real(8) :: azim, elev                       ! azimuth and elevation of los
+    real(8), dimension(8) :: ci                 ! node contribution
 
-    integer :: ni
-    real(8), dimension(ni) :: xi,yi,zi
-    real(8), dimension(ni) :: vi
-    real(8), dimension(ni,nx*ny*nz) :: ci
+!    real(8) :: nanvalue
 
-    real(8) :: nanvalue
+    real(16) :: sa, sb
+    real(16) :: ds1, ds2, ds3, ds4
+    real(16) :: alpha, beta
+    !real(8), parameter :: pi=3.14159265
+    real(16), parameter :: pi = 4*atan(1.0_16)
 
-    integer :: i
+    real(16) :: cosa, sina, cosb, sinb
+    real(16) :: a, b, c
+    real(16) :: int_1_ds
+    real(16) :: int_x_ds, int_y_ds, int_z_ds
+    real(16) :: int_xy_ds, int_xz_ds, int_yz_ds
+    real(16) :: int_xyz_ds
 
-    real(8) :: a1,a2,b1,b2,c1,c2
-    real(8) :: x1,x2,y1,y2,z1,z2
-    integer, dimension(1) :: vtest
-    integer :: test
-    integer :: i1,i2,j1,j2,k1,k2
+    integer :: i, j, k, kk, kkk
 
-    integer :: l111,l121,l211,l221,l112,l122,l212,l222
-    integer :: v111,v121,v211,v221,v112,v122,v212,v222
+    real(8) :: ddd
+    integer :: di1, di2, dj1, dj2, dk1, dk2
+    real(16) :: ddx, ddy, ddz, ddi, ddj, ddk
 
-    real(8) :: xmin,xmax,ymin,ymax,zmin,zmax
+    real(16) :: c000, c100, c010, c001, c110, c101, c011, c111
+    real(16), dimension(8) :: ccc
+    real(16) :: ctmp
 
-    xmin = minval(x)
-    xmax = maxval(x)
-    ymin = minval(y)
-    ymax = maxval(y)
-    zmin = minval(z)
-    zmax = maxval(z)
+    !real(8) :: ztmp
+
+    ! TEST TRANSFORM Z POSITIF VERS LE HAUT...
+    !ztmp = z1
+    !z1 = -z2
+    !z2 = -ztmp
+    !za = -za
+    !zb = -zb
+    !z0 = -z0
+
+!write(*,*) 'pi = ', pi
 
     ci = 0
-    vi = 0
 
-    ! parallel default(none), &
-        ! shared(nx,ny,nz,x,y,z,v,ni,xi,yi,zi,vi,xmin,xmax,ymin,ymax,zmin,zmax,nanvalue,ci), &
-        ! private(i,a1,a2,b1,b2,c1,c2,x1,x2,y1,y2,z1,z2,vtest,test,i1,i2,j1,j2,k1,k2, &
-        ! l111,l121,l211,l221,l112,l122,l212,l222,v111,v121,v211,v221,v112,v122,v212,v222)
-    ! do schedule(static,ni/omp_get_num_threads())
-    do i = 1,ni
+    sa = sqrt((xa-x0)**2+(ya-y0)**2+(za-z0)**2)
+    sb = sqrt((xb-x0)**2+(yb-y0)**2+(zb-z0)**2)
 
-        ! NaN if outside grid coordinates
-        if (xi(i) < xmin .or. xi(i) > xmax .or. yi(i) < ymin .or. yi(i) > ymax .or. zi(i) < zmin .or. zi(i) > zmax) then
-            vi(i) = nanvalue
-            cycle
+    !if (sb < sa) then
+    !    write(*,*) 'DEBUGTLIC (sa,sb) =', sa, sb
+    !end if
+
+    ds1 = sb-sa
+    ds2 = (sb**2-sa**2)/2
+    ds3 = (sb**3-sa**3)/3
+    ds4 = (sb**4-sa**4)/4
+
+    ddd = (x2-x1)*(y2-y1)*(z2-z1)
+
+    !if (x2-x1 < 0 .or. y2-y1 < 0 .or. z2-z1 < 0) then
+    !    write(*,*) 'DEBUGTLIC (x1,x2,y1,y2,z1,z2) =', x1, x2, y1, y2, z1, z2
+    !end if
+
+    alpha = elev
+    beta = azim
+
+    sina = sin(alpha)
+    cosa = cos(alpha)
+    sinb = sin(beta)
+    cosb = cos(beta)
+
+    ! coefficient directeur de la droite
+    a = sinb*cosa
+    b = cosb*cosa
+    c = -sina ! car z positif vers le bas
+    !c = sina
+
+!write(*,*) 'DEBUG TLIC (x1 x2 y1 y2 z1 z2)', x1, x2, y1, y2, z1, z2
+!write(*,*) 'DEBUG TLIC (xa ya za xb yb zb)', xa, ya, za, xb, yb, zb
+!write(*,*) 'DEBUG TLIC (x0 y0 z0 azim elev)', x0, y0, z0, azim, elev
+!write(*,*) 'DEBUG TLIC (sa sb ds1 ds2 ds3 ds4)', sa, sb, ds1, ds2, ds3, ds4
+!write(*,*) 'DEBUG TLIC (ddd a b c)', ddd, a, b, c
+
+    !write(*,*) '---'
+    !write(*,*) a, b, c
+    !write(*,*) ds1, ds2, ds3, ds4
+    !write(*,*) ddd
+
+    ! Integrals
+    int_1_ds = ds1
+    int_x_ds = x0*ds1 + a*ds2
+    int_y_ds = y0*ds1 + b*ds2
+    int_z_ds = z0*ds1 + c*ds2
+    int_xy_ds = x0*y0*ds1 + (x0*b+y0*a)*ds2 + a*b*ds3
+    int_xz_ds = x0*z0*ds1 + (x0*c+z0*a)*ds2 + a*c*ds3
+    int_yz_ds = y0*z0*ds1 + (y0*c+z0*b)*ds2 + b*c*ds3
+    int_xyz_ds = x0*y0*z0*ds1 + (x0*y0*c+x0*z0*b+y0*z0*a)*ds2 &
+       + (x0*b*c+y0*a*c+z0*a*b)*ds3 &
+       + a*b*c*ds4
+
+    if (b==0 .and. c==0) then
+        write(*,*) 'TRILIN', int_1_ds, int_x_ds, int_y_ds, int_z_ds
+        write(*,*) 'TRILIN', int_xy_ds, int_xz_ds, int_yz_ds, int_xyz_ds
+    end if
+
+    ! Contribution of the 8 nodes
+
+    do i = 1,2
+        if (i == 1) then
+            di1 = 1
+            di2 = 0
+        elseif (i == 2) then
+            di1 = 0
+            di2 = 1
         end if
+        ddi = di2-di1
+        ddx = di1*x2-di2*x1
+        do j = 1,2
+            if (j == 1) then
+                dj1 = 1
+                dj2 = 0
+            elseif (j == 2) then
+                dj1 = 0
+                dj2 = 1
+            end if
+            ddj = dj2-dj1
+            ddy = dj1*y2-dj2*y1
+            do k = 1,2
+                if (k == 1) then
+                    dk1 = 1
+                    dk2 = 0
+                elseif (k == 2) then
+                    dk1 = 0
+                    dk2 = 1
+                end if
+                ddk = dk2-dk1
+                ddz = dk1*z2-dk2*z1
+                c000 = ddx*ddy*ddz
+                c100 = ddy*ddz*ddi
+                c010 = ddx*ddz*ddj
+                c001 = ddx*ddy*ddk
+                c110 = ddz*ddi*ddj
+                c101 = ddy*ddi*ddk
+                c011 = ddx*ddj*ddk
+                c111 = ddi*ddj*ddk
+                ! pour eviter les erreurs numeriques lors de l'addition dans ci
+                ! on range par ordre croissant (NB : 4 positifs et 4 negatifs)
+                ! et on additionne d'abord 2 par 2 (1 positif + 1 negatif)
+                ccc(1) = c000*int_1_ds
+                ccc(2) = c100*int_x_ds
+                ccc(3) = c010*int_y_ds
+                ccc(4) = c001*int_z_ds
+                ccc(5) = c110*int_xy_ds
+                ccc(6) = c101*int_xz_ds
+                ccc(7) = c011*int_yz_ds
+                ccc(8) = c111*int_xyz_ds
+                do kk = 2,8
+                    do kkk = kk,2,-1
+                    if (ccc(kkk-1) > ccc(kkk)) then
+                        ctmp = ccc(kkk)
+                        ccc(kkk) = ccc(kkk-1)
+                        ccc(kkk-1) = ctmp
+                    end if
+                    end do
+                end do
 
-        ! Find indices i1 and i2 of neighbours along x axis
-        vtest = minloc(abs(x-xi(i)))
-        test = vtest(1)
-        if (xi(i) >= x(test) .and. test < nx) then
-            i1 = test
-            i2 = test+1
-        else if (xi(i) < x(test) .or. test == nx) then
-            i1 = test-1
-            i2 = test
-        end if
+    if (b==0 .and. c==0) then
+        write(*,*) 'TRILIN', ddi, ddj, ddk
+        write(*,*) 'TRILIN', ddx, ddy, ddz, ddd
+        write(*,*) 'TRILIN', c000, c100, c010, c001
+        write(*,*) 'TRILIN', c110, c101, c011, c111
+    end if
 
-        ! Find indices y1 and y2 of neighbours along y axis
-        vtest = minloc(abs(y-yi(i)))
-        test = vtest(1)
-        if (yi(i) >= y(test) .and. test < ny) then
-            j1 = test
-            j2 = test+1
-        else if (yi(i) < y(test) .or. test == ny) then
-            j1 = test-1
-            j2 = test
-        end if
+                           !l111 = 1
+                           !l211 = 2
+                           !l121 = 1+2 = 3
+                           !l221 = 2+2 = 4
+                           !l112 = 1+4 = 5
+                           !l212 = 2+4 = 6
+                           !l122 = 1+2+4 = 7
+                           !l222 = 2+2+4 = 8
+                ! maxval: si contribution negative (erreurs numeriques), on clip a zero
+                ci(i+(j-1)*2+(k-1)*4) = maxval((/0.0_8,dble((ccc(1)+ccc(8))+(ccc(2)+ccc(7))+(ccc(3)+ccc(6))+(ccc(4)+ccc(5)))/))
+                !ci(i+(j-1)*2+(k-1)*4) = c000*int_1_ds &
+                !    + c100*int_x_ds + c010*int_y_ds + c001*int_z_ds &
+                !    + c110*int_xy_ds + c101*int_xz_ds + c011*int_yz_ds &
+                !    + c111*int_xyz_ds
 
-        ! Find indices z1 and z2 of neighbours along z axis
-        vtest = minloc(abs(z-zi(i)))
-        test = vtest(1)
-        if (zi(i) >= z(test) .and. test < nz) then
-            k1 = test
-            k2 = test+1
-        else if (zi(i) < z(test) .or. test == nz) then
-            k1 = test-1
-            k2 = test
-        end if
-
-        ! Coordinates of the 8 nodes
-        x1 = x(i1)
-        x2 = x(i2)
-        y1 = y(j1)
-        y2 = y(j2)
-        z1 = z(k1)
-        z2 = z(k2)
-
-        ! Linear indices of the 8 nodes
-        l111 = i1+(j1-1)*nx+(k1-1)*nx*ny
-        l121 = i1+(j2-1)*nx+(k1-1)*nx*ny
-        l211 = i2+(j1-1)*nx+(k1-1)*nx*ny
-        l221 = i2+(j2-1)*nx+(k1-1)*nx*ny
-        l112 = i1+(j1-1)*nx+(k2-1)*nx*ny
-        l122 = i1+(j2-1)*nx+(k2-1)*nx*ny
-        l212 = i2+(j1-1)*nx+(k2-1)*nx*ny
-        l222 = i2+(j2-1)*nx+(k2-1)*nx*ny
-
-        ! Extract values at the 8 nodes
-        v111 = v(l111)
-        v121 = v(l121)
-        v211 = v(l211)
-        v221 = v(l221)
-        v112 = v(l112)
-        v122 = v(l122)
-        v212 = v(l212)
-        v222 = v(l222)
-
-        ! Compute coefficients a1,a2,b1,b2,c1,c2
-        a1 = (x2-xi(i))/(x2-x1)
-        a2 = (xi(i)-x1)/(x2-x1)
-        b1 = (y2-yi(i))/(y2-y1)
-        b2 = (yi(i)-y1)/(y2-y1)
-        c1 = (z2-zi(i))/(z2-z1)
-        c2 = (zi(i)-z1)/(z2-z1)
-
-        ! Fill up grid of coefficients
-        ci(i,l111) = a1*b1*c1
-        ci(i,l121) = a1*b2*c1
-        ci(i,l211) = a2*b1*c1
-        ci(i,l221) = a2*b2*c1
-        ci(i,l112) = a1*b1*c2
-        ci(i,l122) = a1*b2*c2
-        ci(i,l212) = a2*b1*c2
-        ci(i,l222) = a2*b2*c2
-
-        ! Compute interpolated value
-        vi(i) = a1*b1*c1*v111 + a1*b2*c1*v121 + a2*b1*c1*v211 + a2*b2*c1*v221 &
-              + a1*b1*c2*v112 + a1*b2*c2*v122 + a2*b1*c2*v212 + a2*b2*c2*v222
-
+                !if (ci(i+(j-1)*2+(k-1)*4) < 0) then
+                !    write(*,*) 'DEBUGTLIC C000', c000, int_1_ds, c000*int_1_ds
+                !    write(*,*) 'DEBUGTLIC C100', c100, int_x_ds, c100*int_x_ds
+                !    write(*,*) 'DEBUGTLIC C010', c010, int_y_ds, c010*int_y_ds
+                !    write(*,*) 'DEBUGTLIC C001', c001, int_z_ds, c001*int_z_ds
+                !    write(*,*) 'DEBUGTLIC C110', c110, int_xy_ds, c110*int_xy_ds
+                !    write(*,*) 'DEBUGTLIC C101', c101, int_xz_ds, c101*int_xz_ds
+                !    write(*,*) 'DEBUGTLIC C011', c011, int_yz_ds, c011*int_yz_ds
+                !    write(*,*) 'DEBUGTLIC C111', c111, int_xyz_ds, c111*int_xyz_ds
+                !    !write(*,*) 'DEBUGTLIC', x1,x2,y1,y2,z1,z2,xa,ya,za,xb,yb,zb,x0,y0,z0,azim,elev
+                !end if
+                !write(*,*) 'DEBUGTLIC', (ci(i+(j-1)*2+(k-1)*4)<0), &
+                !    (ccc(1) > 0), &
+                !    (ccc(2) > 0), &
+                !    (ccc(3) > 0), &
+                !    (ccc(4) > 0), &
+                !    (ccc(5) > 0), &
+                !    (ccc(6) > 0), &
+                !    (ccc(7) > 0), &
+                !    (ccc(8) > 0), &
+                    !c000*int_1_ds, &
+                    !c000*int_1_ds + c100*int_x_ds, &
+                    !c000*int_1_ds + c100*int_x_ds + c010*int_y_ds, &
+                    !c000*int_1_ds + c100*int_x_ds + c010*int_y_ds + c001*int_z_ds, &
+                    !c000*int_1_ds + c100*int_x_ds + c010*int_y_ds + c001*int_z_ds + c110*int_xy_ds, &
+                    !c000*int_1_ds + c100*int_x_ds + c010*int_y_ds + c001*int_z_ds + c110*int_xy_ds + &
+                    !    c101*int_xz_ds, &
+                    !c000*int_1_ds + c100*int_x_ds + c010*int_y_ds + c001*int_z_ds + c110*int_xy_ds + &
+                    !    c101*int_xz_ds + c011*int_yz_ds, &
+                !    ci(i+(j-1)*2+(k-1)*4), &
+                !    c000*int_1_ds + c100*int_x_ds + c010*int_y_ds + c001*int_z_ds + c110*int_xy_ds + &
+                 !       c101*int_xz_ds + c011*int_yz_ds + c111*int_xyz_ds
+            end do
+        end do
     end do
-    ! end do
-    ! end parallel
+
+    ci = ci/ddd
 
 end subroutine trilinintcoeffs
